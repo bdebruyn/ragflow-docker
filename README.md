@@ -58,6 +58,47 @@ ragflow-docker/
 
 ---
 
+
+## Building the Image
+
+The Dockerfile uses a **multi-stage build** — a dedicated Node stage compiles the React frontend in isolation before the main Debian image is assembled. This separation is necessary because RAGflow's frontend (11k+ modules) requires more memory than Docker Desktop allocates by default.
+
+### 1. Configure Docker Desktop memory
+
+Before building, open **Docker Desktop → Settings → Resources → Advanced** and set:
+
+| Setting | Required value |
+|---------|---------------|
+| Memory  | **12 GB** minimum |
+| Swap    | **4 GB** minimum |
+
+Click **Apply & Restart**. The build will be killed by the OS OOM killer with exit code 134 if memory is insufficient — the symptom is a `FATAL ERROR: Ineffective mark-compacts near heap limit` message followed by `Killed`.
+
+> **Why so much?** The Vite bundler peaks at ~2.5 GB of heap during the frontend build. The Python dependency install in the main stage requires additional memory concurrently. With 12 GB allocated, both stages have comfortable headroom and 4 GB of swap provides a safety net against transient spikes.
+
+### 2. Build the image
+
+```bash
+./build.sh
+```
+
+The build clones RAGflow from GitHub, installs all Python dependencies via `uv`, and compiles the React frontend. Expect **10–20 minutes** on first build; subsequent builds are fast due to Docker layer caching.
+
+### Known build quirks on macOS
+
+The following issues were encountered building on macOS with an Intel i9 and have been handled in the Dockerfile — they are documented here for reference.
+
+**Node.js heap exhaustion** — `npm run build` OOMs inside a single-stage Dockerfile because the Node build and Python deps compete for the same memory budget. Resolved by isolating the frontend into a separate builder stage (`FROM node:20-slim AS frontend-builder`) so it has the full memory allocation to itself, with `NODE_OPTIONS=--max-old-space-size=4096`.
+
+**TLS failure in the Node builder stage** — `node:20-slim` ships without `ca-certificates`, causing `git clone` to fail with `server certificate verification failed`. Resolved by installing `ca-certificates` before the clone step.
+
+**Missing `docs/` directory** — Vite imports `docs/references/http_api_reference.md` as a raw asset at build time. The sparse checkout must include both `web` and `docs` or the build exits with `ENOENT`.
+
+**macOS UID below Debian's `UID_MIN`** — macOS assigns user UIDs starting at 501, but Debian's `/etc/login.defs` rejects UIDs below 1000 by default, causing `useradd` to fail. Resolved by lowering `UID_MIN` and `GID_MIN` to 100 in `login.defs` before creating the user.
+
+**GID collision with system groups** — macOS GID 20 (`staff`) conflicts with Debian's GID 20 (`dialout`). `groupadd` refuses to reuse an existing GID without `--non-unique`, and silently fails (swallowed by `|| true`), leaving no named group for `chown`. Resolved by passing `--non-unique` to `groupadd` and using numeric `UID:GID` in `chown` rather than the group name.
+
+---
 ## Installation
 
 Clone the repository and create the system-wide command links:
