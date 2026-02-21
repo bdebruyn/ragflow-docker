@@ -1,0 +1,111 @@
+services:
+
+  # ── Backing services ──────────────────────────────────────────────────────
+
+  elasticsearch:
+    image: elasticsearch:8.11.3
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    # ports:
+    #   - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\\|yellow\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ragflow
+      MYSQL_DATABASE: ragflow
+      MYSQL_USER: ragflow
+      MYSQL_PASSWORD: ragflow
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ragflow
+      MINIO_ROOT_PASSWORD: ragflow123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    # ports:
+    #   - "9001:9001"   # MinIO console
+    #   - "9000:9000"   # MinIO API
+
+  # ── RAGflow app ───────────────────────────────────────────────────────────
+  ragflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        Base: "debian:bookworm-slim"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+        Name: "ragflow"
+    image: ragflow-debian:latest
+    container_name: ragflow_app
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=ragflow
+      - MYSQL_PASSWORD=ragflow
+      - MYSQL_DATABASE=ragflow
+      - MINIO_HOST=minio:9000
+      - MINIO_USER=ragflow
+      - MINIO_PASSWORD=ragflow123
+    ports:
+      - "80:80"
+      - "443:443"
+      - "9380:9380"
+    volumes:
+      - ${HOME}/.gitconfig:/home/ragflow/.gitconfig:ro
+      - ${HOME}/.ssh/id_rsa:/home/ragflow/.ssh/id_rsa:ro
+      - ${RAGFLOW_PROJECT_DIR}/config:/workspace/config:ro
+      - /tmp:/tmp:delegated
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
+    hostname: ragflow-dev
+    stdin_open: true
+    tty: true
+
+volumes:
+  es_data:
+  redis_data:
+  mysql_data:
+  minio_data:
