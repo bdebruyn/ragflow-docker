@@ -97,6 +97,38 @@ RUN uv run download_deps.py
 # Node never runs in this stage — no memory pressure from the Vite build
 COPY --from=frontend-builder /ragflow/web/dist /ragflow/web/dist
 
+# ── Configure nginx ──────────────────────────────────────────────────────────
+# entrypoint.sh calls /usr/sbin/nginx but doesn't copy config files first.
+RUN mkdir -p /etc/nginx/conf.d /var/log/nginx && \
+    cp /ragflow/docker/nginx/nginx.conf /etc/nginx/nginx.conf && \
+    cp /ragflow/docker/nginx/ragflow.conf /etc/nginx/conf.d/ragflow.conf && \
+    cp /ragflow/docker/nginx/proxy.conf /etc/nginx/proxy.conf && \
+    rm -f /etc/nginx/sites-enabled/default
+
+# ── Stage service_conf template where entrypoint.sh expects it ──────────────
+# entrypoint.sh reads from /ragflow/conf/service_conf.yaml.template, not docker/
+RUN mkdir -p /ragflow/conf && \
+    cp /ragflow/docker/service_conf.yaml.template /ragflow/conf/service_conf.yaml.template
+
+
+# ── Download NLTK data ───────────────────────────────────────────────────────
+# Download all corpora RAGflow's tokenizer/lemmatizer/stemmer pipeline requires.
+RUN /ragflow/.venv/bin/python -c "\
+import nltk; \
+nltk.download('punkt_tab'); \
+nltk.download('averaged_perceptron_tagger_eng'); \
+nltk.download('wordnet'); \
+nltk.download('omw-1.4'); \
+nltk.download('stopwords'); \
+nltk.download('words'); \
+"
+
+# ── Extra runtime libs (added last to preserve cache of expensive layers above) ──
+# libgl1 is required by opencv-python (cv2) which is imported by the task executor.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── Create user matching host UID/GID ─────────────────────────────────────────
 # macOS UIDs (e.g. 501) are below Debian's default UID_MIN 1000 — lower the floor.
 # Use --non-unique so we can reuse a GID already claimed by a system group (e.g. GID 20 = dialout).
@@ -118,5 +150,6 @@ WORKDIR /ragflow
 
 EXPOSE 80 443 9380
 
-# entrypoint.sh starts nginx, ragflow_server, and the task executor
-CMD ["/bin/bash", "docker/entrypoint.sh"]
+# entrypoint.sh starts nginx, ragflow_server, and task_executor then waits.
+# This is PID 1 — the container stays alive as long as entrypoint.sh is running.
+CMD ["/ragflow/docker/entrypoint.sh"]

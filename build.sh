@@ -7,6 +7,7 @@ cacheArg=""   # set to "--no-cache" to force a clean build
 
 # Optional: use BuildKit layer cache
 # cacheArg="--cache-from ${dockerImageName}:latest"
+# cacheArg="--no-cache"
 
 docker build \
     ${cacheArg} \
